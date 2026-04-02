@@ -1,118 +1,191 @@
-# Online Music Streaming Server
-### TCP-Based Client-Server Audio Streaming | Python
+#  Online Music Streaming Server
+### Secure TCP-Based Client-Server Audio Streaming | Python | SSL/TLS
+
 ---
+
+## Requirements Met
+
+| Requirement | Status |
+|-------------|--------|
+| TCP sockets (low-level) |  `socket.SOCK_STREAM` |
+| SSL/TLS secure communication |  All data encrypted |
+| Multiple concurrent clients |  Threading per client |
+| Network sockets only (no IPC) |  |
+| Python |  |
+| GitHub documentation | This README |
+
+---
+
 ## Project Structure
+
 ```
 music_streaming/
-├── server.py          # Member 1 – TCP server, multi-client streaming
-├── client.py          # Member 2 – Client app, buffering, playback
-├── qos.py             # Member 3 – QoS evaluation (latency, throughput, buffer)
-├── music/             # Place your .mp3 / .wav / .ogg files here
-├── downloads/         # Client-saved files appear here (auto-created)
+├── server.py       # Member 1 — TCP server, SSL, multi-client streaming
+├── client.py       # Member 2 — SSL client, buffering, pygame playback
+├── qos.py          # Member 3 — latency, throughput, buffer delay, QoS report
+├── cert.pem        # SSL certificate (generate — see below)
+├── key.pem         # SSL private key  (generate — see below)
+├── music/          # Place .mp3 / .wav / .ogg files here
+├── downloads/      # Received files saved here (auto-created)
 └── README.md
 ```
+
 ---
-## Requirements
-- Python 3.7+
-- pygame (for audio playback)
-Install dependencies:
+
+## Setup
+
+### 1. Install Dependencies
 ```bash
 pip install pygame
 ```
----
-## How to Run
-### Step 1 – Add Music Files
-Put your `.mp3`, `.wav`, or `.ogg` audio files into the `music/` folder:
-```
-music_streaming/
-└── music/
-    ├── song1.mp3
-    ├── song2.wav
-    └── ...
-```
-### Step 2 – Start the Server
 
-Open a terminal and run:
+### 2. Generate SSL Certificate (Self-Signed)
+Run this once in the project folder:
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+```
+When prompted, you can press Enter for all fields or fill them in.
+
+This creates:
+- `cert.pem` — the public certificate (shared with clients)
+- `key.pem` — the private key (kept on server only)
+
+### 3. Add Music Files
+Place `.mp3`, `.wav`, or `.ogg` files into the `music/` folder.
+
+---
+
+## How to Run
+
+### Terminal 1 — Start Server
 ```bash
 python server.py
 ```
-You should see:
-```
-==================================================
-  Music Streaming Server started on port 5000
-  Music folder : ./music/
-  Chunk size   : 4096 bytes
-  Songs found  : 2
-    • song1.mp3
-    • song2.wav
-==================================================
-Waiting for clients...
-```
-### Step 3 – Start the Client
 
-Open a **second terminal** and run:
+### Terminal 2 — Start Client
 ```bash
 python client.py
 ```
-You will see the song list and can select a track to stream.
-### Step 4 – QoS Latency Test
-To measure latency separately (while server is running):
+
+### QoS Latency Test (while server is running)
 ```bash
 python qos.py --ping 127.0.0.1 5000
 ```
----
-## Testing with Multiple Clients
 
-Open multiple terminals and run `python client.py` in each.  
-The server handles each client in its own thread simultaneously.
----
-## Configuration
-
-Edit the top of each file to change defaults:
-
-| File | Variable | Default | Description |
-|------|----------|---------|-------------|
-| server.py | `HOST` | `0.0.0.0` | Listen on all interfaces |
-| server.py | `PORT` | `5000` | Server port |
-| server.py | `CHUNK_SIZE` | `4096` | Bytes per packet |
-| server.py | `BUFFER_DELAY` | `0.01` | Delay between chunks (s) |
-| client.py | `SERVER_HOST` | `127.0.0.1` | Server IP address |
-| client.py | `SERVER_PORT` | `5000` | Server port |
-| client.py | `BUFFER_FILL_THRESHOLD` | `8` | Chunks to buffer before playback |
+### Multiple Clients (open more terminals)
+```bash
+python client.py   # Terminal 3
+python client.py   # Terminal 4
+```
 
 ---
 
-## QoS Parameters Measured
-
-| Metric | How | Where |
-|--------|-----|-------|
-| **Latency** | TCP connect RTT (5 samples) | `qos.py --ping` |
-| **Throughput** | Bytes received ÷ elapsed time | Shown after each stream |
-| **Buffer Delay** | Time from connect to playback start | Shown after each stream |
-| **Packet Integrity** | Chunks expected vs received | Shown after each stream |
-| **Server Throughput** | Bytes sent ÷ stream duration | Shown in server logs |
----
-## How It Works
+## Architecture
 
 ```
-CLIENT                          SERVER
-  |                               |
-  |──── TCP Connect ─────────────►|
-  |◄─── Song List (JSON) ─────────|
-  |                               |
-  |──── Request: song.mp3 ───────►|
-  |◄─── stream_start (metadata) ──|
-  |◄═══ Audio chunks (4KB each) ══|  ← streaming
-  |  [buffer fills → playback]    |
-  |◄─── stream_end (stats) ───────|
-  |                               |
-  |  [QoS report printed]         |
-  |──── disconnect ──────────────►|
+┌─────────────────────────────────────────────────────┐
+│                    SERVER                           │
+│                                                     │
+│  start_server()                                     │
+│    └─► SSL wrap socket (cert.pem + key.pem)         │
+│    └─► accept() loop                                │
+│          └─► new thread → handle_client()           │
+│                └─► send song list                   │
+│                └─► receive request                  │
+│                └─► stream_file() in chunks          │
+└─────────────────────────────────────────────────────┘
+           ▲ SSL/TLS encrypted tunnel ▼
+┌─────────────────────────────────────────────────────┐
+│                    CLIENT                           │
+│                                                     │
+│  run_client()                                       │
+│    └─► SSL wrap socket (cert.pem for verification)  │
+│    └─► connect()                                    │
+│    └─► receive song list → display menu             │
+│    └─► send request                                 │
+│    └─► receive_and_buffer()                         │
+│          └─► accumulate chunks                      │
+│          └─► after 8 chunks → start playback thread │
+│    └─► print QoS report                             │
+└─────────────────────────────────────────────────────┘
 ```
+
 ---
+
+## Protocol Design
+
+All control messages use a **length-prefix JSON protocol**:
+
+```
+┌──────────────┬──────────────────────────────┐
+│  4 bytes     │  N bytes                     │
+│  (length)    │  (JSON payload)              │
+└──────────────┴──────────────────────────────┘
+```
+
+### Message Types
+
+| Direction | Type | Fields |
+|-----------|------|--------|
+| Server → Client | `song_list` | `songs: []` |
+| Client → Server | `request` | `filename` |
+| Server → Client | `stream_start` | `filename, file_size, chunk_size` |
+| Server → Client | `stream_end` | `bytes_sent, duration` |
+| Client → Server | `disconnect` | — |
+| Server → Client | `error` | `msg` |
+
+After `stream_start`, raw audio bytes are sent directly (no JSON wrapper) in `chunk_size` packets until `file_size` bytes are transferred.
+
+---
+
+## SSL/TLS Implementation
+
+- **Protocol**: TLS 1.2 minimum (`ssl.TLSVersion.TLSv1_2`)
+- **Certificate**: Self-signed X.509 (RSA 4096-bit)
+- **Scope**: ALL communication encrypted — song list, requests, audio chunks
+- **Verification**: Client verifies server certificate via `cert.pem`
+
+```python
+# Server wraps socket with SSL
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain('cert.pem', 'key.pem')
+secure_sock = context.wrap_socket(raw_sock, server_side=True)
+
+# Client connects via SSL
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+context.load_verify_locations('cert.pem')
+conn = context.wrap_socket(raw_sock, server_hostname=host)
+```
+
+---
+
+## QoS Parameters
+
+| Metric | Method | Where |
+|--------|--------|-------|
+| **Latency** | SSL TCP connect RTT (5 samples) | `python qos.py --ping` |
+| **Throughput** | bytes ÷ elapsed time → KB/s, Mbps | After each stream |
+| **Buffer Delay** | Time from connect → playback start | After each stream |
+| **Packet Loss** | Chunks expected vs received | After each stream |
+| **Server Throughput** | Bytes sent ÷ stream duration | Server terminal logs |
+
+---
+
+## TCP vs UDP — Design Decision
+
+**TCP was chosen** because:
+- Audio streaming requires **reliable, ordered delivery** — dropped packets cause audio corruption
+- TCP handles retransmission automatically
+- SSL/TLS is built on top of TCP
+
+UDP would require custom retransmission logic and is better suited for real-time video calls where latency matters more than completeness.
+
+---
+
 ## Team
-| Member | Role | Files |
-|--------|------|-------|
-| Member 1 | Server-side streaming + multi-client management | `server.py` |
-| Member 2 | Client app + audio playback + buffering | `client.py` |
-| Member 3 | QoS evaluation + packet management + documentation | `qos.py`, `README.md` |
+
+| Member | Role | File |
+|--------|------|------|
+| Member 1 | Server, SSL setup, multi-client threading | `server.py` |
+| Member 2 | Client, SSL connection, buffering, playback | `client.py` |
+| Member 3 | QoS metrics, latency test, documentation | `qos.py`, `README.md` |
